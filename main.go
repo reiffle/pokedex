@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -13,7 +16,21 @@ var commandRegistry map[string]cliCommand
 type cliCommand struct {
 	name        string
 	description string
-	callback    func() error
+	callback    func(*Config) error
+}
+type Config struct {
+	next     string
+	previous string
+}
+
+type LocationAreaResponse struct {
+	Count    int    `json:"count"`
+	Next     string `json:"next"`
+	Previous string `json:"previous"`
+	Results  []struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	} `json:"results"`
 }
 
 func cleanInput(text string) []string {
@@ -25,13 +42,13 @@ func cleanInput(text string) []string {
 	return split_words
 }
 
-func commandExit() error {
+func commandExit(config *Config) error {
 	fmt.Println("Closing the Pokedex... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 
-func commandHelp() error {
+func commandHelp(config *Config) error {
 	fmt.Println("Welcome to the Pokedex!")
 	fmt.Println("Usage:")
 	fmt.Println("")
@@ -49,8 +66,75 @@ func commandHelp() error {
 	return nil
 }
 
+func commandMap(config *Config) error {
+	url := "https://pokeapi.co/api/v2/location-area/"
+	if config.next != "" { //Works because the first time config is called, config.next is an empty string
+		url = config.next
+	}
+
+	res, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	rep, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	var areas LocationAreaResponse //Note, this is just a single struct, not a slice
+
+	if err = json.Unmarshal(rep, &areas); err != nil {
+		return err
+	}
+
+	config.next = areas.Next
+	config.previous = areas.Previous
+
+	for _, area := range areas.Results {
+		fmt.Println(area.Name)
+	}
+	return nil
+}
+
+func commandMapb(config *Config) error {
+	if config.previous == "" {
+		fmt.Println("You're on the first page")
+		return nil
+	}
+
+	url := config.previous
+	res, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	rep, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	var areas LocationAreaResponse
+
+	if err = json.Unmarshal(rep, &areas); err != nil {
+		return err
+	}
+	config.next = areas.Next
+	config.previous = areas.Previous
+
+	for _, area := range areas.Results {
+		fmt.Println(area.Name)
+	}
+	return nil
+}
+
 func repl() {
 	scanner := bufio.NewScanner(os.Stdin)
+	config := &Config{}
 	for {
 		fmt.Print("Pokedex > ")
 		scanner.Scan()
@@ -61,7 +145,7 @@ func repl() {
 		command := words[0]
 		cmd, exists := commandRegistry[command]
 		if exists {
-			err := cmd.callback()
+			err := cmd.callback(config)
 			if err != nil {
 				fmt.Println(err)
 			}
@@ -84,6 +168,18 @@ func init() {
 			name:        "help",
 			description: "Displays a help message",
 			callback:    commandHelp,
+		},
+
+		"map": {
+			name:        "map",
+			description: "Displays next 20 location areas in the Pokemon world",
+			callback:    commandMap,
+		},
+
+		"mapb": {
+			name:        "mapb",
+			description: "Displays the previous 20 location areas in the Pokemon world",
+			callback:    commandMapb,
 		},
 	}
 }
